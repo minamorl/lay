@@ -3,3 +3,4 @@ dist/
 tsconfig.tsbuildinfo
 *.js.map
 .env
+package-lock.json

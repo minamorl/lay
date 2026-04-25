@@ -1,6 +1,26 @@
 {
   "name": "@minamorl/lay",
-  "version": "0.0.2",
+  "version": "1.0.0",
+  "description": "Lens-based reactive state container with composable observation algebra. Eliminate the mapping layer.",
+  "keywords": [
+    "lens",
+    "optics",
+    "state",
+    "reactive",
+    "proxy",
+    "typescript",
+    "react",
+    "presheaf",
+    "category-theory"
+  ],
+  "homepage": "https://github.com/minamorl/lay",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minamorl/lay.git"
+  },
+  "bugs": {
+    "url": "https://github.com/minamorl/lay/issues"
+  },
   "publishConfig": {
     "access": "public"
   },

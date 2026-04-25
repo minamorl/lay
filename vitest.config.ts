@@ -5,4 +5,7 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('development'),
+  },
 });
