@@ -5,6 +5,50 @@ All notable changes to `@minamorl/lay` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-04-26
+
+Adds **Traversal**: the lens algebra extends from "exactly one focus" to
+"zero or more foci", closing the gap between row-projection and
+collection-projection.
+
+### Added
+
+- **`Traversal<S, A>`** — discriminated union with `kind: 'rw' | 'ro'`,
+  parallel to `Lens<S, A>` but with `get: S => A[]` and
+  `set: (S, A[]) => S`. Writes with mismatched length are **silently
+  no-op** (preserving monoid laws under traversal composition).
+- **`rwTraversal(get, set)`** / **`roTraversal(get)`** — builders.
+- **`arrayTraversal<A>()`** — standard traversal over every element of
+  an array (`Traversal<A[], A>`).
+- **`filteredTraversal<A>(predicate)`** — narrows a traversal to elements
+  satisfying a predicate. Writes back only into matching positions; non-
+  matching positions remain unchanged.
+- **`Focus.eachOf(traversal)`** — produce `Focus<A>[]` from a traversal.
+  Each element-focus carries write-back propagation to the parent state,
+  with `reflect` notifying on element-level updates.
+- **`Focus.atIndex(i)`** (sugar) — single-element lens for arrays.
+  Out-of-range writes are no-op.
+
+### Composition Laws Preserved
+
+- `eachOf` followed by `usingLens` composes cleanly: traversal element
+  focuses behave identically to direct field focuses on cloned rows.
+- Length-mismatch detection between `get` and `set` keeps traversal
+  composition associative under structural mutation of the parent.
+- `eachOf` followed by `decompose` produces multi-row, multi-view
+  observations (e.g. `users[].displayName` + `users[].isAdult`) without
+  intermediate copies.
+
+### Tests
+
+- 12 new tests covering: array traversal read/write/notify, atIndex sugar
+  with out-of-range no-op, filteredTraversal positional write-back,
+  nested `using('users').eachOf(...)`, RO traversal silent-noop, length-
+  mismatch noop, traversal × decompose composition, and `fromFocus` on
+  traversal elements.
+- Total test count: **73** (up from 61), plus 5 React tests = **78/78 pass**.
+- TypeScript `tsc --noEmit`: clean.
+
 ## [1.0.0] - 2026-04-26
 
 First stable release. Lay graduates from a deep-lens state container into a

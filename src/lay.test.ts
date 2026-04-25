@@ -6,6 +6,10 @@ import {
   decompose,
   focusOf,
   fromFocus,
+  rwTraversal,
+  roTraversal,
+  arrayTraversal,
+  filteredTraversal,
 } from "./index";
 
 describe("lay", () => {
@@ -947,6 +951,190 @@ describe("lay", () => {
 
         state.using("first_name").set("Aoi");
         expect(viaSugar.get()).toBe(viaCore.get());
+      });
+    });
+  });
+
+  // ============================================================
+  // Traversal — 0個以上のフォーカスを同時に観測する射
+  // ============================================================
+  describe("Traversal", () => {
+    describe("arrayTraversal — standard array elements", () => {
+      it("should expose each element as a Focus<A>", () => {
+        const state = lay([1, 2, 3]);
+        const focuses = state.eachOf(arrayTraversal<number>());
+
+        expect(focuses).toHaveLength(3);
+        expect(focuses.map((f) => f.get())).toEqual([1, 2, 3]);
+      });
+
+      it("should propagate writes back through the parent", () => {
+        const state = lay([10, 20, 30]);
+        const focuses = state.eachOf(arrayTraversal<number>());
+
+        focuses[1].set(99);
+        expect(state.get()).toEqual([10, 99, 30]);
+      });
+
+      it("should notify reflect listeners on element write", () => {
+        const state = lay([1, 2, 3]);
+        const focuses = state.eachOf(arrayTraversal<number>());
+        const listener = vi.fn();
+        state.reflect(listener);
+
+        focuses[0].set(100);
+        expect(listener).toHaveBeenCalledWith([100, 2, 3]);
+      });
+    });
+
+    describe("atIndex — sugar for array element lens", () => {
+      it("should focus a single element by index", () => {
+        const state = lay(["a", "b", "c"]);
+        const second = state.atIndex<string>(1);
+
+        expect(second.get()).toBe("b");
+        second.set("BB");
+        expect(state.get()).toEqual(["a", "BB", "c"]);
+      });
+
+      it("should noop on out-of-range write", () => {
+        const state = lay([1, 2]);
+        const oob = state.atIndex<number>(5);
+
+        oob.set(999); // noop（範囲外）
+        expect(state.get()).toEqual([1, 2]);
+      });
+    });
+
+    describe("filteredTraversal — predicate-narrowed elements", () => {
+      it("should expose only elements matching the predicate", () => {
+        const state = lay([1, 2, 3, 4, 5]);
+        const evens = state.eachOf(filteredTraversal<number>((n) => n % 2 === 0));
+
+        expect(evens.map((f) => f.get())).toEqual([2, 4]);
+      });
+
+      it("should write back only to matching positions", () => {
+        const state = lay([1, 2, 3, 4, 5]);
+        const evens = state.eachOf(filteredTraversal<number>((n) => n % 2 === 0));
+
+        evens[0].set(20); // 元の `2` を 20 に
+        evens[1].set(40); // 元の `4` を 40 に
+        expect(state.get()).toEqual([1, 20, 3, 40, 5]);
+      });
+    });
+
+    describe("eachOf on Focus<{users: User[]}>", () => {
+      type User = { name: string; age: number };
+      type AppState = { users: User[] };
+
+      it("should traverse a nested array via using('users').eachOf(...)", () => {
+        const state = lay<AppState>({
+          users: [
+            { name: "Yui", age: 17 },
+            { name: "Aoi", age: 22 },
+          ],
+        });
+
+        const userFocuses = state.using("users").eachOf(arrayTraversal<User>());
+        expect(userFocuses).toHaveLength(2);
+
+        // 個別ユーザーのageに usingLens で深く入る
+        const ageLens = rwLens<User, number>(
+          (u) => u.age,
+          (u, v) => ({ ...u, age: v }),
+        );
+        const firstAge = userFocuses[0].usingLens(ageLens);
+
+        firstAge.set(18);
+        expect(state.get().users[0].age).toBe(18);
+        expect(state.get().users[1].age).toBe(22); // 他要素は不変
+      });
+    });
+
+    describe("RO traversal — read-only collection observation", () => {
+      it("should expose elements but make writes silently noop", () => {
+        const state = lay({ scores: [10, 20, 30] });
+        const doubledTrav = roTraversal<{ scores: number[] }, number>((s) =>
+          s.scores.map((n) => n * 2),
+        );
+        const doubled = state.eachOf(doubledTrav);
+
+        expect(doubled.map((f) => f.get())).toEqual([20, 40, 60]);
+
+        doubled[0].set(999); // noop
+        expect(state.get().scores).toEqual([10, 20, 30]);
+      });
+    });
+
+    describe("Length-mismatch noop semantics", () => {
+      it("should silently noop when array length changes between read and write", () => {
+        const state = lay([1, 2, 3]);
+        const focuses = state.eachOf(arrayTraversal<number>());
+
+        // 取得後に親の配列を変える（要素を消す）
+        state.set([1, 2]);
+
+        // この時点でfocuses[2].set(...) は内部で長さ不一致を検出してnoop
+        focuses[2].set(99);
+        expect(state.get()).toEqual([1, 2]);
+      });
+    });
+
+    describe("Composition — Traversal + decompose", () => {
+      it("should combine eachOf with decompose for multi-view arrays", () => {
+        type Row = { first_name: string; last_name: string; age: number };
+        const initial: Row[] = [
+          { first_name: "Yui", last_name: "Sama", age: 17 },
+          { first_name: "Aoi", last_name: "X", age: 22 },
+        ];
+        const state = lay(initial);
+        const rowFocuses = state.eachOf(arrayTraversal<Row>());
+
+        // 各行に対して decompose で多視点を被せる
+        const decomps = rowFocuses.map((rf) =>
+          decompose(rf, {
+            displayName: roLens<Row, string>(
+              (r) => `${r.first_name} ${r.last_name}`,
+            ),
+            isAdult: roLens<Row, boolean>((r) => r.age >= 18),
+          }),
+        );
+
+        expect(focusOf(decomps[0], "displayName").get()).toBe("Yui Sama");
+        expect(focusOf(decomps[0], "isAdult").get()).toBe(false);
+        expect(focusOf(decomps[1], "isAdult").get()).toBe(true);
+
+        // 1行目のageを更新 → isAdult も追従
+        rowFocuses[0].usingLens(rwLens<Row, number>(
+          (r) => r.age,
+          (r, v) => ({ ...r, age: v }),
+        )).set(20);
+
+        expect(focusOf(decomps[0], "isAdult").get()).toBe(true);
+        expect(state.get()[0].age).toBe(20);
+      });
+    });
+
+    describe("fromFocus on traversal element", () => {
+      it("should produce a CrayLike from each element", () => {
+        const state = lay([{ x: 1 }, { x: 2 }]);
+        const focuses = state.eachOf(arrayTraversal<{ x: number }>());
+
+        const xLens = rwLens<{ x: number }, number>(
+          (s) => s.x,
+          (s, v) => ({ ...s, x: v }),
+        );
+        const cray = fromFocus(focuses[0].usingLens(xLens));
+
+        expect(cray.tag).toBe("cray-like");
+        expect(cray.get()).toBe(1);
+
+        const doubled = cray.map((n) => n * 2);
+        expect(doubled.get()).toBe(2);
+
+        cray.set(10);
+        expect(state.get()[0].x).toBe(10);
       });
     });
   });

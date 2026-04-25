@@ -29,6 +29,62 @@ export const roLens = <S, A>(get: (s: S) => A): Lens<S, A> => ({
   get,
 });
 
+/**
+ * Traversal<S, A> — 0個以上のフォーカスを同時に観測する射。
+ *
+ * Lensが「必ず1個」なのに対し、Traversalは「リスト的に複数」。
+ * - kind: 'rw' は双方向。setに渡された配列の要素ごとに backward を適用する。
+ * - kind: 'ro' は読み取り専用（roLensと同じく書き込みはnoop）。
+ *
+ * 書き込みのセマンティクス：
+ *   set(s, as) は `as.length === get(s).length` のときのみ意味を持つ。
+ *   長さ不一致は noop（合成則・モノイド則保存のため例外を投げない）。
+ */
+export type Traversal<S, A> =
+  | {
+      readonly kind: "rw";
+      get: (s: S) => A[];
+      set: (s: S, as: A[]) => S;
+    }
+  | { readonly kind: "ro"; get: (s: S) => A[] };
+
+export const rwTraversal = <S, A>(
+  get: (s: S) => A[],
+  set: (s: S, as: A[]) => S,
+): Traversal<S, A> => ({ kind: "rw", get, set });
+
+export const roTraversal = <S, A>(
+  get: (s: S) => A[],
+): Traversal<S, A> => ({ kind: "ro", get });
+
+/**
+ * 配列の全要素に対する標準Traversal。
+ * 書き戻しは要素単位の置換（長さ不一致時は noop）。
+ */
+export const arrayTraversal = <A>(): Traversal<A[], A> =>
+  rwTraversal(
+    (s) => [...s],
+    (s, as) => (as.length === s.length ? [...as] : s),
+  );
+
+/**
+ * 述語で絞った要素群に対するTraversal。
+ * 書き戻しは「フィルタ後の配列と同じ長さ・順序」を期待する。
+ */
+export const filteredTraversal = <A>(
+  predicate: (a: A) => boolean,
+): Traversal<A[], A> =>
+  rwTraversal(
+    (s) => s.filter(predicate),
+    (s, as) => {
+      // フィルタ通過要素のみを順番にasで置換
+      const filtered = s.filter(predicate);
+      if (as.length !== filtered.length) return s; // noop: 長さ不一致
+      let cursor = 0;
+      return s.map((a) => (predicate(a) ? as[cursor++] : a));
+    },
+  );
+
 export interface Focus<S> {
   get(): S;
   set(value: S): void;
@@ -39,6 +95,17 @@ export interface Focus<S> {
    * ROレンズの場合、返されるFocusの set/update は noop になる。
    */
   usingLens<A>(lens: Lens<S, A>): Focus<A>;
+  /**
+   * Traversalで複数のフォーカスを同時に得る。
+   * 各要素は親への書き戻しが伝播する独立したFocus<A>。
+   * ROトラバーサル/書き込み不可Focusの場合は要素のsetはnoop。
+   */
+  eachOf<A>(traversal: Traversal<S, A>): Focus<A>[];
+  /**
+   * 配列要素への単一Lens（糖衣）。`S` が配列のときのみ意味を持つ。
+   * 範囲外indexへの書き込みは noop、読み取りは undefined を返しうる。
+   */
+  atIndex<A>(this: Focus<A[]>, index: number): Focus<A>;
   reflect(listener: Listener<S>, comparator?: Comparator<S>): () => void;
 }
 
@@ -118,6 +185,60 @@ export const lay = <S>(initial: S): Focus<S> => {
             setter!(next);
           },
         );
+      },
+      eachOf: <A>(traversal: Traversal<T, A>): Focus<A>[] => {
+        const elements = traversal.get(getter());
+        const length = elements.length;
+        const isWritable = traversal.kind === "rw" && writable;
+
+        return elements.map((_, index) => {
+          // 各要素に対する個別のFocus
+          // get: 現在の配列をtraversal.getで取り出してindex位置を返す
+          // set: 該当indexだけ更新した配列をtraversal.setで親に書き戻す
+          const elementGetter = () => {
+            const current = traversal.get(getter());
+            return current[index] as A;
+          };
+
+          if (!isWritable) {
+            return createFocus<A>(elementGetter, null);
+          }
+
+          // ここでは traversal.kind === 'rw' が確定している（isWritableの定義より）
+          const rwTrav = traversal as Extract<
+            Traversal<T, A>,
+            { kind: "rw" }
+          >;
+          const elementSetter = (a: A) => {
+            const parent = getter();
+            const arr = rwTrav.get(parent);
+            // 長さが取得時と変わっていたらnoop（合成則保存）
+            if (arr.length !== length) return;
+            const next = [...arr];
+            next[index] = a;
+            const updatedParent = rwTrav.set(parent, next);
+            setter!(updatedParent);
+          };
+
+          return createFocus<A>(elementGetter, elementSetter);
+        });
+      },
+      atIndex: function <A>(this: Focus<A[]>, index: number): Focus<A> {
+        // T が配列であることを前提とした糖衣。
+        // 内部的には要素位置に対するrwLensを構築してusingLensに委譲する。
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const self = this as unknown as Focus<any[]>;
+        const indexLens: Lens<A[], A> = {
+          kind: "rw",
+          get: (s) => s[index] as A,
+          set: (s, a) => {
+            if (index < 0 || index >= s.length) return s; // noop: 範囲外
+            const next = [...s];
+            next[index] = a;
+            return next;
+          },
+        };
+        return self.usingLens(indexLens) as Focus<A>;
       },
       reflect: (listener: Listener<T>, comparator?: Comparator<T>) => {
         const sub: Subscription<T> = {

@@ -1,9 +1,10 @@
 {
   "name": "@minamorl/lay",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Lens-based reactive state container with composable observation algebra. Eliminate the mapping layer.",
   "keywords": [
     "lens",
+    "traversal",
     "optics",
     "state",
     "reactive",
